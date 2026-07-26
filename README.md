@@ -30,13 +30,19 @@ pip install "trading-backtest[all]"           # All dependencies
 
 ## Quick Start
 
-### 1. Create a run directory
+### 1. Install
+
+```bash
+pip install "trading-backtest[global-equity]"  # US/HK stocks via yfinance
+```
+
+### 2. Create a strategy directory
 
 ```bash
 mkdir -p runs/my_strategy/code
 ```
 
-### 2. Write config (`runs/my_strategy/config.json`)
+### 3. Write config (`runs/my_strategy/config.json`)
 
 ```json
 {
@@ -54,7 +60,7 @@ mkdir -p runs/my_strategy/code
 }
 ```
 
-### 3. Implement signal engine (`runs/my_strategy/code/signal_engine.py`)
+### 4. Implement signal engine (`runs/my_strategy/code/signal_engine.py`)
 
 ```python
 import pandas as pd
@@ -80,16 +86,23 @@ class SignalEngine:
         return signals
 ```
 
-### 4. Run backtest
+Or use the **built-in strategy** (one line, no custom code needed):
+
+```python
+# runs/my_strategy/code/signal_engine.py
+from backtest.strategy import DefaultSignalEngine as SignalEngine
+```
+
+### 5. Run
 
 ```bash
 python -m backtest.runner runs/my_strategy
 ```
 
-### 5. View results
+### 6. View results
 
 Output in `runs/my_strategy/artifacts/`:
-- `report.html` — Visual HTML report
+- `report.html` — Visual HTML report (open in browser)
 - `equity.csv` — Equity curve
 - `trades.csv` — Trade log
 - `metrics.csv` — Performance metrics
