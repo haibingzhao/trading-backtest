@@ -116,6 +116,93 @@ Configure via `signal_params` in `config.json`:
 }
 ```
 
+## Usage Examples
+
+### A-share (China)
+
+```json
+{
+  "codes": ["600519.SH"],
+  "start_date": "2023-01-01",
+  "end_date": "2025-01-01",
+  "source": "auto",
+  "commission": 0.005,
+  "signal_params": {"ema_fast": 8, "ema_slow": 21}
+}
+```
+
+> A-share requires `pip install "trading-backtest[a-share]"`. Set `TUSHARE_TOKEN` in `.env` for best data quality, or use free sources (akshare/baostock) with no key.
+
+### Hong Kong Stock
+
+```json
+{
+  "codes": ["09988.HK"],
+  "start_date": "2024-01-01",
+  "end_date": "2025-07-01",
+  "source": "auto",
+  "hk_commission": 0.005,
+  "hk_stamp_tax": 0.001,
+  "signal_params": {"allow_short": true, "risk_per_trade": 0.05}
+}
+```
+
+### Crypto (24/7)
+
+```json
+{
+  "codes": ["BTC-USDT", "ETH-USDT"],
+  "start_date": "2024-01-01",
+  "end_date": "2025-01-01",
+  "source": "okx",
+  "interval": "4H",
+  "initial_cash": 100000,
+  "leverage": 2.0
+}
+```
+
+> Crypto requires `pip install "trading-backtest[crypto]"` for multi-exchange support via ccxt. The built-in `okx` source works without extra dependencies.
+
+### Walk-Forward Optimization
+
+Add to `config.json` to validate parameter robustness:
+
+```json
+{
+  "walk_forward_opt": {
+    "param_grid": {
+      "ema_fast": [5, 8, 12],
+      "ema_slow": [13, 21, 30],
+      "risk_per_trade": [0.03, 0.05]
+    },
+    "n_splits": 3,
+    "objective": "sharpe"
+  }
+}
+```
+
+```bash
+python -m backtest.walk_forward_opt runs/my_strategy
+# Output: runs/my_strategy/artifacts/walk_forward_opt.json
+```
+
+### Statistical Validation
+
+```json
+{
+  "validation": {
+    "monte_carlo": {"n_simulations": 1000, "confidence": 0.95},
+    "walk_forward": {"n_splits": 5}
+  }
+}
+```
+
+### More Examples
+
+See the [`examples/`](examples/) directory for complete runnable strategies:
+- `examples/ema_crossover/` — Custom EMA crossover (hand-written SignalEngine)
+- `examples/builtin_strategy/` — One-liner using the built-in framework
+
 ## Configuration Reference
 
 | Field | Required | Description |
