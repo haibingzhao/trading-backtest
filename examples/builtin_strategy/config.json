@@ -1,0 +1,17 @@
+{
+  "codes": ["09988.HK"],
+  "start_date": "2024-01-01",
+  "end_date": "2025-01-01",
+  "source": "auto",
+  "interval": "1D",
+  "engine": "daily",
+  "initial_cash": 1000000,
+  "signal_params": {
+    "allow_short": true,
+    "risk_per_trade": 0.05,
+    "trend_strength_threshold": 22,
+    "max_drawdown_halt": 0.10,
+    "ema_fast": 8,
+    "ema_slow": 21
+  }
+}

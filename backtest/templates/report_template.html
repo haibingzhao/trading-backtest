@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>__TITLE__</title>
+<script src="https://cdn.plot.ly/plotly-2.35.0.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1117; --card: #1a1d28; --border: #2a2d3a;
+    --text: #e1e4ea; --muted: #8b8fa3; --green: #22c55e;
+    --red: #ef4444; --blue: #3b82f6; --yellow: #eab308;
+    --purple: #a855f7;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 20px; }
+  .header { text-align: center; margin-bottom: 24px; }
+  .header h1 { font-size: 24px; font-weight: 600; }
+  .header .sub { color: var(--muted); font-size: 14px; margin-top: 4px; }
+  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .metric-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; text-align: center; }
+  .metric-card .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+  .metric-card .value { font-size: 22px; font-weight: 700; }
+  .metric-card .value.pos { color: var(--green); }
+  .metric-card .value.neg { color: var(--red); }
+  .metric-card .value.neutral { color: var(--blue); }
+  .chart-container { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 20px; overflow: hidden; position: relative; }
+  .chart-title { font-size: 16px; font-weight: 600; margin-bottom: 12px; padding-left: 8px; border-left: 3px solid var(--blue); }
+  
+  .trade-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .trade-table th { background: #1e2130; color: var(--muted); padding: 10px 12px; text-align: left; font-weight: 500; position: sticky; top: 0; }
+  .trade-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  .trade-table tr:hover { background: rgba(59,130,246,0.05); }
+  .trade-table .pos { color: var(--green); }
+  .trade-table .neg { color: var(--red); }
+  .table-wrap { max-height: 400px; overflow: auto; border-radius: 8px; border: 1px solid var(--border); }
+  .tabs { display: flex; gap: 0; margin-bottom: 0; position: relative; z-index: 100; pointer-events: auto; }
+  .tab { padding: 10px 20px; cursor: pointer; background: transparent; border: 1px solid var(--border); color: var(--muted); font-size: 14px; transition: all 0.2s; position: relative; z-index: 100; }
+  .tab:first-child { border-radius: 8px 0 0 0; }
+  .tab:last-child { border-radius: 0 8px 0 0; }
+  .tab.active { background: var(--card); color: var(--blue); border-bottom-color: var(--card); }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>__TITLE__</h1>
+  <div class="sub">__SUBTITLE__</div>
+</div>
+
+<div class="metrics" id="metricsGrid"></div>
+
+<div class="chart-container">
+  <div class="chart-title">价格与交易信号</div>
+  <div id="priceChart" style="height:420px"></div>
+  <div style="text-align:center;color:var(--muted);font-size:12px;margin-top:8px;">🖱️ 拖拽平移 · 滚轮缩放 · 双击重置</div>
+</div>
+
+<div class="chart-container">
+  <div class="chart-title">持仓权重 (多+ / 空-)</div>
+  <div id="posChart" style="height:180px"></div>
+</div>
+
+<div class="chart-container">
+  <div class="chart-title">权益曲线</div>
+  <div id="equityChart" style="height:250px"></div>
+</div>
+
+<div class="chart-container">
+  <div class="chart-title">回撤</div>
+  <div id="ddChart" style="height:180px"></div>
+</div>
+
+<div id="extraCharts" style="display:none">
+
+<div class="chart-container" id="yearlyChartContainer" style="display:none">
+  <div class="chart-title">年度分段报告</div>
+  <div id="yearlyTable"></div>
+</div>
+
+<div class="chart-container" id="monthlySummaryContainer" style="display:none">
+  <div class="chart-title">月度统计摘要</div>
+  <div id="monthlySummaryTable"></div>
+</div>
+
+<div class="chart-container" id="monthlyChartContainer" style="display:none">
+  <div class="chart-title">月度收益分布</div>
+  <div id="monthlyChart" style="height:300px"></div>
+</div>
+
+<div class="chart-container" id="underwaterChartContainer" style="display:none">
+  <div class="chart-title">回撤事件水下曲线</div>
+  <div id="underwaterChart" style="height:250px"></div>
+</div>
+
+<div class="chart-container" id="benchmarkChartContainer" style="display:none">
+  <div class="chart-title">策略 vs 基准对比</div>
+  <div id="benchmarkChart" style="height:300px"></div>
+</div>
+
+<div class="chart-container" id="rollingSharpeContainer" style="display:none">
+  <div class="chart-title">滚动夏普比率</div>
+  <div id="rollingSharpeChart" style="height:220px"></div>
+</div>
+
+<div class="chart-container" id="rollingDdContainer" style="display:none">
+  <div class="chart-title">滚动最大回撤</div>
+  <div id="rollingDdChart" style="height:220px"></div>
+</div>
+
+<div class="chart-container" id="rollingExcessContainer" style="display:none">
+  <div class="chart-title">滚动超额收益</div>
+  <div id="rollingExcessChart" style="height:220px"></div>
+</div>
+
+</div>
+
+<div class="chart-container">
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab('trades')">交易日志</div>
+    <div class="tab" onclick="switchTab('stats')">统计</div>
+  </div>
+  <div id="tab-trades" class="tab-content active" style="background:var(--card);border:1px solid var(--border);border-radius:0 8px 8px 8px;padding:12px;">
+    <div class="table-wrap" id="tradeTableWrap"></div>
+  </div>
+  <div id="tab-stats" class="tab-content" style="background:var(--card);border:1px solid var(--border);border-radius:0 8px 8px 8px;padding:16px;">
+    <div id="statsContent"></div>
+  </div>
+</div>
+
+<script>
+// Chart data is embedded directly into the HTML
+const DATA = __CHART_DATA_JSON__;
+const COMMISSION_RATE = __COMMISSION_RATE__;
+const SLIPPAGE_RATE = __SLIPPAGE_RATE__;
+
+function initReport() {
+  renderMetrics();
+  renderPriceChart();
+  renderPosChart();
+  renderEquityChart();
+  renderDdChart();
+  renderExtraCharts();
+  renderTradeTable();
+  renderStats();
+}
+
+function renderMetrics() {
+  const m = __METRICS_JSON__;
+  const grid = document.getElementById('metricsGrid');
+  grid.innerHTML = m.map(x => `<div class="metric-card"><div class="label">${x.label}</div><div class="value ${x.cls}">${x.value}</div></div>`).join('');
+}
+
+function renderPriceChart() {
+  const p = DATA.prices;
+  const dates = p.map(d => d.date);
+  const candlestick = {
+    type: 'candlestick', x: dates,
+    open: p.map(d => d.open), high: p.map(d => d.high),
+    low: p.map(d => d.low), close: p.map(d => d.close),
+    increasing: { line: { color: '#22c55e' } },
+    decreasing: { line: { color: '#ef4444' } },
+    name: '__SYMBOL__'
+  };
+
+  const markers = [];
+  // Buy opens (long) - green triangle up
+  if (DATA.buy_opens.length) {
+    markers.push({
+      type: 'scatter', mode: 'markers',
+      x: DATA.buy_opens.map(d => d.date),
+      y: DATA.buy_opens.map(d => d.open_price),
+      marker: { symbol: 'triangle-up', size: 14, color: '#22c55e', line: { color: '#fff', width: 1 } },
+      name: '做多开仓'
+    });
+  }
+  // Sell opens (short) - red triangle down
+  if (DATA.sell_opens.length) {
+    markers.push({
+      type: 'scatter', mode: 'markers',
+      x: DATA.sell_opens.map(d => d.date),
+      y: DATA.sell_opens.map(d => d.open_price),
+      marker: { symbol: 'triangle-down', size: 14, color: '#ef4444', line: { color: '#fff', width: 1 } },
+      name: '做空开仓'
+    });
+  }
+  // Buy closes (closing a short) - purple diamond
+  if (DATA.buy_closes.length) {
+    markers.push({
+      type: 'scatter', mode: 'markers',
+      x: DATA.buy_closes.map(d => d.date),
+      y: DATA.buy_closes.map(d => d.close_price),
+      marker: { symbol: 'diamond', size: 12, color: '#a855f7', line: { color: '#fff', width: 1 } },
+      name: '做空平仓'
+    });
+  }
+  // Sell closes (closing a long) - yellow x
+  if (DATA.sell_closes.length) {
+    markers.push({
+      type: 'scatter', mode: 'markers',
+      x: DATA.sell_closes.map(d => d.date),
+      y: DATA.sell_closes.map(d => d.close_price),
+      marker: { symbol: 'x', size: 12, color: '#eab308', line: { width: 2.5, color: '#eab308' } },
+      name: '做多平仓'
+    });
+  }
+
+  Plotly.newPlot('priceChart', [candlestick, ...markers], {
+    margin: { l: 50, r: 20, t: 10, b: 40 },
+    xaxis: { type: 'date', tickformat: '%Y-%m-%d', gridcolor: '#1e2130' },
+    yaxis: { gridcolor: '#1e2130', title: '价格 ($)' },
+    paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+    font: { color: '#8b8fa3', size: 11 },
+    legend: { orientation: 'h', y: 1.12 },
+    dragmode: 'pan'
+  }, { responsive: true, displayModeBar: false, scrollZoom: true });
+}
+
+function renderPosChart() {
+  const pos = DATA.positions;
+  const dates = pos.map(d => d.date);
+  const vals = pos.map(d => d.pos);
+  const colors = vals.map(v => v > 0.001 ? 'rgba(34,197,94,0.7)' : v < -0.001 ? 'rgba(239,68,68,0.7)' : 'rgba(100,100,120,0.3)');
+
+  Plotly.newPlot('posChart', [{
+    type: 'bar', x: dates, y: vals,
+    marker: { color: colors },
+    showlegend: false
+  }], {
+    margin: { l: 50, r: 20, t: 5, b: 30 },
+    xaxis: { type: 'date', tickformat: '%Y-%m-%d', gridcolor: '#1e2130' },
+    yaxis: { gridcolor: '#1e2130', title: '权重', range: [-1.2, 1.2] },
+    paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+    font: { color: '#8b8fa3', size: 11 },
+    bargap: 0
+  }, { responsive: true, displayModeBar: false });
+}
+
+function renderEquityChart() {
+  const eq = DATA.equity;
+  Plotly.newPlot('equityChart', [{
+    type: 'scatter', mode: 'lines',
+    x: eq.map(d => d.date), y: eq.map(d => d.equity),
+    line: { color: '#3b82f6', width: 2 },
+    fill: 'tozeroy', fillcolor: 'rgba(59,130,246,0.08)',
+    name: '净值'
+  }], {
+    margin: { l: 60, r: 20, t: 5, b: 30 },
+    xaxis: { type: 'date', tickformat: '%Y-%m-%d', gridcolor: '#1e2130' },
+    yaxis: { gridcolor: '#1e2130', title: '净值 ($)' },
+    paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+    font: { color: '#8b8fa3', size: 11 },
+    shapes: [{
+      type: 'line', x0: eq[0].date, x1: eq[eq.length-1].date,
+      y0: 1000000, y1: 1000000,
+      line: { color: '#555', width: 1, dash: 'dash' }
+    }]
+  }, { responsive: true, displayModeBar: false });
+}
+
+function renderDdChart() {
+  const eq = DATA.equity;
+  Plotly.newPlot('ddChart', [{
+    type: 'scatter', mode: 'lines',
+    x: eq.map(d => d.date), y: eq.map(d => d.drawdown * 100),
+    line: { color: '#ef4444', width: 1.5 },
+    fill: 'tozeroy', fillcolor: 'rgba(239,68,68,0.15)',
+    name: '回撤'
+  }], {
+    margin: { l: 50, r: 20, t: 5, b: 30 },
+    xaxis: { type: 'date', tickformat: '%Y-%m-%d', gridcolor: '#1e2130' },
+    yaxis: { gridcolor: '#1e2130', title: '回撤 (%)' },
+    paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+    font: { color: '#8b8fa3', size: 11 }
+  }, { responsive: true, displayModeBar: false });
+}
+
+function renderExtraCharts() {
+  const validation = DATA.validation || {};
+  const comparison = DATA.comparison || {};
+  let hasExtra = false;
+
+  // Yearly breakdown table
+  const byYear = DATA.by_year || {};
+  if (Object.keys(byYear).length > 0) {
+    hasExtra = true;
+    document.getElementById('yearlyChartContainer').style.display = 'block';
+    let html = '<table class="trade-table"><thead><tr><th>年份</th><th>收益率</th><th>夏普比</th><th>最大回撤</th><th>波动率</th><th>交易数</th></tr></thead><tbody>';
+    for (const [year, m] of Object.entries(byYear).sort()) {
+      const retCls = m.return_pct >= 0 ? 'pos' : 'neg';
+      const ddCls = m.max_drawdown > -5 ? 'pos' : m.max_drawdown > -15 ? '' : 'neg';
+      html += `<tr>
+        <td>${year}</td>
+        <td class="${retCls}">${m.return_pct.toFixed(2)}%</td>
+        <td>${m.sharpe.toFixed(2)}</td>
+        <td class="${ddCls}">${m.max_drawdown.toFixed(2)}%</td>
+        <td>${m.volatility.toFixed(2)}%</td>
+        <td>${m.trade_count}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    document.getElementById('yearlyTable').innerHTML = html;
+  }
+
+  // Monthly summary stats
+  const byMonth = DATA.by_month || {};
+  if (byMonth.n_months > 0) {
+    hasExtra = true;
+    document.getElementById('monthlySummaryContainer').style.display = 'block';
+    const pf = byMonth.profit_factor;
+    const pfStr = pf === Infinity ? '∞' : pf.toFixed(2);
+    const pfCls = pf > 1 ? 'pos' : 'neg';
+    document.getElementById('monthlySummaryTable').innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:16px;font-size:14px;">
+        <div><span style="color:var(--muted)">总月数</span><br><strong>${byMonth.n_months}</strong></div>
+        <div><span style="color:var(--muted)">月度胜率</span><br><strong>${byMonth.win_rate.toFixed(1)}%</strong></div>
+        <div><span style="color:var(--muted)">平均盈利月</span><br><strong style="color:var(--green)">${byMonth.avg_win_pct.toFixed(2)}%</strong></div>
+        <div><span style="color:var(--muted)">平均亏损月</span><br><strong style="color:var(--red)">${byMonth.avg_loss_pct.toFixed(2)}%</strong></div>
+        <div><span style="color:var(--muted)">Profit Factor</span><br><strong class="${pfCls}">${pfStr}</strong></div>
+        <div><span style="color:var(--muted)">最大连续盈利</span><br><strong>${byMonth.max_consecutive_wins} 月</strong></div>
+        <div><span style="color:var(--muted)">最大连续亏损</span><br><strong>${byMonth.max_consecutive_losses} 月</strong></div>
+        <div><span style="color:var(--muted)">最佳/最差月</span><br><strong style="color:var(--green)">${byMonth.best_month_pct.toFixed(2)}%</strong> / <strong style="color:var(--red)">${byMonth.worst_month_pct.toFixed(2)}%</strong></div>
+      </div>
+    `;
+  }
+
+  // Monthly return distribution histogram
+  const distData = validation.distribution || {};
+  const monthlyReturns = (distData.monthly_returns || {}).monthly_returns || [];
+  if (monthlyReturns.length > 0) {
+    hasExtra = true;
+    document.getElementById('monthlyChartContainer').style.display = 'block';
+    const returns = monthlyReturns.map(m => (m.return * 100).toFixed(2));
+    Plotly.newPlot('monthlyChart', [{
+      type: 'histogram', x: returns, nbinsx: 20,
+      marker: { color: 'rgba(59,130,246,0.7)' },
+      name: '月度收益'
+    }], {
+      margin: { l: 50, r: 20, t: 20, b: 40 },
+      xaxis: { title: '月收益率 (%)', gridcolor: '#1e2130' },
+      yaxis: { title: '频次', gridcolor: '#1e2130' },
+      paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+      font: { color: '#8b8fa3', size: 11 },
+      shapes: [{ type: 'line', x0: 0, x1: 0, y0: 0, y1: 1, yref: 'paper',
+        line: { color: '#ef4444', width: 1.5, dash: 'dash' } }]
+    }, { responsive: true, displayModeBar: false });
+  }
+
+  // Underwater curve (drawdown events)
+  const ddEvents = (distData.drawdown_events || {}).events || [];
+  if (ddEvents.length > 0) {
+    hasExtra = true;
+    document.getElementById('underwaterChartContainer').style.display = 'block';
+    const eq = DATA.equity;
+    const shapes = ddEvents.slice(0, 5).map((e, i) => ({
+      type: 'rect', x0: e.peak_date, x1: e.recovery_date || eq[eq.length-1].date,
+      y0: 0, y1: 1, yref: 'paper',
+      fillcolor: 'rgba(239,68,68,0.1)', line: { width: 0 }
+    }));
+    Plotly.newPlot('underwaterChart', [{
+      type: 'scatter', mode: 'lines',
+      x: eq.map(d => d.date), y: eq.map(d => d.drawdown * 100),
+      line: { color: '#ef4444', width: 1.5 },
+      fill: 'tozeroy', fillcolor: 'rgba(239,68,68,0.2)',
+      name: '回撤'
+    }], {
+      margin: { l: 50, r: 20, t: 20, b: 30 },
+      xaxis: { type: 'date', tickformat: '%Y-%m-%d', gridcolor: '#1e2130' },
+      yaxis: { gridcolor: '#1e2130', title: '回撤 (%)' },
+      paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+      font: { color: '#8b8fa3', size: 11 },
+      shapes: shapes
+    }, { responsive: true, displayModeBar: false });
+  }
+
+  // Benchmark comparison overlay
+  const compChartData = (comparison.chart_data || []);
+  if (compChartData.length > 0) {
+    hasExtra = true;
+    document.getElementById('benchmarkChartContainer').style.display = 'block';
+    const metrics = comparison.metrics || {};
+    const summary = comparison.summary || {};
+    const annotations = [
+      { x: 0.02, y: 0.98, text: `Beta: ${metrics.beta || 0}`, showarrow: false, xref: 'paper', yref: 'paper', font: { color: '#8b8fa3', size: 11 } },
+      { x: 0.02, y: 0.92, text: `Alpha: ${((metrics.alpha || 0) * 100).toFixed(2)}%`, showarrow: false, xref: 'paper', yref: 'paper', font: { color: '#8b8fa3', size: 11 } },
+      { x: 0.02, y: 0.86, text: `跟踪误差: ${((metrics.tracking_error || 0) * 100).toFixed(2)}%`, showarrow: false, xref: 'paper', yref: 'paper', font: { color: '#8b8fa3', size: 11 } }
+    ];
+    Plotly.newPlot('benchmarkChart', [
+      { type: 'scatter', mode: 'lines', x: compChartData.map(d => d.date),
+        y: compChartData.map(d => (d.strategy_return * 100).toFixed(2)),
+        line: { color: '#3b82f6', width: 2 }, name: '策略' },
+      { type: 'scatter', mode: 'lines', x: compChartData.map(d => d.date),
+        y: compChartData.map(d => (d.benchmark_return * 100).toFixed(2)),
+        line: { color: '#8b8fa3', width: 1.5, dash: 'dash' }, name: '基准' }
+    ], {
+      margin: { l: 50, r: 20, t: 20, b: 30 },
+      xaxis: { type: 'date', tickformat: '%Y-%m-%d', gridcolor: '#1e2130' },
+      yaxis: { gridcolor: '#1e2130', title: '累计收益 (%)' },
+      paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+      font: { color: '#8b8fa3', size: 11 },
+      legend: { x: 0.8, y: 0.2, bgcolor: 'rgba(0,0,0,0)' },
+      annotations: annotations
+    }, { responsive: true, displayModeBar: false });
+  }
+
+  if (hasExtra) {
+    document.getElementById('extraCharts').style.display = 'block';
+  }
+
+  // Rolling monitor charts
+  const rolling = DATA.rolling || {};
+  if (rolling.rolling_sharpe && rolling.rolling_sharpe.length > 0) {
+    document.getElementById('extraCharts').style.display = 'block';
+    document.getElementById('rollingSharpeContainer').style.display = 'block';
+    Plotly.newPlot('rollingSharpeChart', [{
+      type: 'scatter', mode: 'lines',
+      x: rolling.rolling_sharpe.map(d => d.date),
+      y: rolling.rolling_sharpe.map(d => d.value),
+      line: { color: '#3b82f6', width: 1.5 },
+      name: 'Rolling Sharpe'
+    }], {
+      margin: { l: 50, r: 20, t: 10, b: 30 },
+      xaxis: { type: 'date', gridcolor: '#1e2130' },
+      yaxis: { gridcolor: '#1e2130', title: 'Sharpe' },
+      paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+      font: { color: '#8b8fa3', size: 11 },
+      shapes: [{ type: 'line', x0: rolling.rolling_sharpe[0].date, x1: rolling.rolling_sharpe[rolling.rolling_sharpe.length-1].date,
+        y0: 0, y1: 0, line: { color: '#ef4444', width: 1, dash: 'dash' } }]
+    }, { responsive: true, displayModeBar: false });
+  }
+
+  if (rolling.rolling_drawdown && rolling.rolling_drawdown.length > 0) {
+    document.getElementById('extraCharts').style.display = 'block';
+    document.getElementById('rollingDdContainer').style.display = 'block';
+    Plotly.newPlot('rollingDdChart', [{
+      type: 'scatter', mode: 'lines',
+      x: rolling.rolling_drawdown.map(d => d.date),
+      y: rolling.rolling_drawdown.map(d => (d.value * 100).toFixed(2)),
+      line: { color: '#ef4444', width: 1.5 },
+      fill: 'tozeroy', fillcolor: 'rgba(239,68,68,0.15)',
+      name: 'Rolling Max DD'
+    }], {
+      margin: { l: 50, r: 20, t: 10, b: 30 },
+      xaxis: { type: 'date', gridcolor: '#1e2130' },
+      yaxis: { gridcolor: '#1e2130', title: '回撤 (%)' },
+      paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+      font: { color: '#8b8fa3', size: 11 }
+    }, { responsive: true, displayModeBar: false });
+  }
+
+  if (rolling.rolling_excess_return && rolling.rolling_excess_return.length > 0) {
+    document.getElementById('extraCharts').style.display = 'block';
+    document.getElementById('rollingExcessContainer').style.display = 'block';
+    Plotly.newPlot('rollingExcessChart', [{
+      type: 'scatter', mode: 'lines',
+      x: rolling.rolling_excess_return.map(d => d.date),
+      y: rolling.rolling_excess_return.map(d => (d.value * 100).toFixed(2)),
+      line: { color: '#a855f7', width: 1.5 },
+      name: 'Rolling Excess'
+    }], {
+      margin: { l: 50, r: 20, t: 10, b: 30 },
+      xaxis: { type: 'date', gridcolor: '#1e2130' },
+      yaxis: { gridcolor: '#1e2130', title: '超额收益 (%)' },
+      paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+      font: { color: '#8b8fa3', size: 11 },
+      shapes: [{ type: 'line', x0: rolling.rolling_excess_return[0].date, x1: rolling.rolling_excess_return[rolling.rolling_excess_return.length-1].date,
+        y0: 0, y1: 0, line: { color: '#8b8fa3', width: 1, dash: 'dash' } }]
+    }, { responsive: true, displayModeBar: false });
+  }
+}
+
+function renderTradeTable() {
+  const allTrades = DATA.buy_opens.map(t => ({...t, type: 'LONG_OPEN'}))
+    .concat(DATA.sell_opens.map(t => ({...t, type: 'SHORT_OPEN'})))
+    .concat(DATA.sell_closes.map(t => ({...t, type: 'LONG_CLOSE'})))
+    .concat(DATA.buy_closes.map(t => ({...t, type: 'SHORT_CLOSE'})))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  let html = '<table class="trade-table"><thead><tr><th>日期</th><th>类型</th><th>价格</th><th>股数</th><th>佣金</th><th>滑点</th><th>盈亏</th><th>收益率</th><th>天数</th></tr></thead><tbody>';
+  
+  for (const t of allTrades) {
+      const pnl = t.pnl || 0;
+      const ret = t.return_pct || 0;
+      const days = t.holding_days || '-';
+      const price = t.open_price || t.close_price || 0;
+      const pnlCls = pnl > 0 ? 'pos' : pnl < 0 ? 'neg' : '';
+      const retCls = ret > 0 ? 'pos' : ret < 0 ? 'neg' : '';
+      const typeLabel = { LONG_OPEN: '做多开仓', SHORT_OPEN: '做空开仓', LONG_CLOSE: '做多平仓', SHORT_CLOSE: '做空平仓' }[t.type] || t.type;
+      const typeColor = { LONG_OPEN: '#22c55e', SHORT_OPEN: '#ef4444', LONG_CLOSE: '#eab308', SHORT_CLOSE: '#a855f7' }[t.type] || '#8b8fa3';
+
+      // Use actual trade size from engine (respects market lot rules)
+      const shares = t.size || 0;
+      const tradeValue = shares * price;
+      const commission = tradeValue * COMMISSION_RATE;
+      const slippage = tradeValue * SLIPPAGE_RATE;
+
+      html += `<tr>
+        <td>${t.date}</td>
+        <td style="color:${typeColor}">${typeLabel}</td>
+        <td>$${price.toFixed(2)}</td>
+        <td>${shares > 0 ? shares.toLocaleString() : '-'}</td>
+        <td style="color:var(--red)">${commission > 0 ? '$' + commission.toFixed(0) : '-'}</td>
+        <td style="color:var(--red)">${slippage > 0 ? '$' + slippage.toFixed(0) : '-'}</td>
+        <td class="${pnlCls}">${pnl !== 0 ? '$' + pnl.toFixed(0) : '-'}</td>
+        <td class="${retCls}">${ret !== 0 ? ret.toFixed(2) + '%' : '-'}</td>
+        <td>${days}</td>
+      </tr>`;
+  }
+  html += '</tbody></table>';
+  document.getElementById('tradeTableWrap').innerHTML = html;
+}
+
+function renderStats() {
+  const longOpen = DATA.buy_opens.length;
+  const shortOpen = DATA.sell_opens.length;
+  const longClose = DATA.sell_closes.length;
+  const shortClose = DATA.buy_closes.length;
+
+  const longTrades = DATA.sell_closes.filter(t => t.pnl > 0).length;
+  const shortTrades = DATA.buy_closes.filter(t => t.pnl > 0).length;
+  const longLoss = DATA.sell_closes.filter(t => t.pnl < 0).length;
+  const shortLoss = DATA.buy_closes.filter(t => t.pnl < 0).length;
+
+  const totalLongPnl = DATA.sell_closes.reduce((s, t) => s + t.pnl, 0);
+  const totalShortPnl = DATA.buy_closes.reduce((s, t) => s + t.pnl, 0);
+
+  // Calculate total commission from actual trade sizes
+  let totalCommission = 0;
+  const allTradeEntries = [
+    ...DATA.buy_opens.map(t => ({ price: t.open_price, size: t.size || 0 })),
+    ...DATA.sell_opens.map(t => ({ price: t.open_price, size: t.size || 0 })),
+    ...DATA.sell_closes.map(t => ({ price: t.close_price, size: t.size || 0 })),
+    ...DATA.buy_closes.map(t => ({ price: t.close_price, size: t.size || 0 }))
+  ];
+  for (const trade of allTradeEntries) {
+    totalCommission += trade.size * trade.price * COMMISSION_RATE;
+  }
+
+  const html = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+      <div>
+        <h3 style="color:var(--blue);margin-bottom:12px;">交易明细</h3>
+        <table style="width:100%;font-size:14px;">
+          <tr><td style="color:var(--muted)">做多交易</td><td style="text-align:right">${longOpen} 开仓 / ${longClose} 平仓</td></tr>
+          <tr><td style="color:var(--muted)">做空交易</td><td style="text-align:right">${shortOpen} 开仓 / ${shortClose} 平仓</td></tr>
+          <tr><td style="color:var(--muted)">做多盈亏</td><td style="text-align:right"><span style="color:var(--green)">${longTrades}胜</span> / <span style="color:var(--red)">${longLoss}负</span></td></tr>
+          <tr><td style="color:var(--muted)">做空盈亏</td><td style="text-align:right"><span style="color:var(--green)">${shortTrades}胜</span> / <span style="color:var(--red)">${shortLoss}负</span></td></tr>
+        </table>
+      </div>
+      <div>
+        <h3 style="color:var(--blue);margin-bottom:12px;">盈亏汇总</h3>
+        <table style="width:100%;font-size:14px;">
+          <tr><td style="color:var(--muted)">做多总盈亏</td><td style="text-align:right;color:${totalLongPnl>=0?'var(--green)':'var(--red)'}">$${totalLongPnl.toFixed(0)}</td></tr>
+          <tr><td style="color:var(--muted)">做空总盈亏</td><td style="text-align:right;color:${totalShortPnl>=0?'var(--green)':'var(--red)'}">$${totalShortPnl.toFixed(0)}</td></tr>
+          <tr><td style="color:var(--muted)">合计盈亏</td><td style="text-align:right;color:${(totalLongPnl+totalShortPnl)>=0?'var(--green)':'var(--red)'}">$${(totalLongPnl+totalShortPnl).toFixed(0)}</td></tr>
+          <tr><td style="color:var(--muted)">手续费总计 (${(COMMISSION_RATE * 100).toFixed(1)}%)</td><td style="text-align:right;color:var(--red)">$${totalCommission.toFixed(0)} (${allTradeEntries.length}笔)</td></tr>
+        </table>
+      </div>
+    </div>
+  `;
+  document.getElementById('statsContent').innerHTML = html;
+}
+
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelector(`.tab[onclick*="${name}"]`).classList.add('active');
+  document.getElementById('tab-' + name).classList.add('active');
+}
+
+initReport();
+</script>
+</body>
+</html>

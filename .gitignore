@@ -1,0 +1,42 @@
+# Build artifacts
+*.egg-info/
+dist/
+build/
+__pycache__/
+*.pyc
+*.pyo
+*.egg
+
+# Virtual environment
+.venv/
+venv/
+
+# Environment variables (secrets)
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing / Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Data cache
+*.parquet
+
+# Run outputs (user-generated)
+runs/
+
+# Internal agent instructions (not for public repo)
+AGENTS.md
+backtest/AGENTS.md

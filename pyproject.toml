@@ -1,0 +1,116 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trading-backtest"
+version = "0.1.0"
+description = "Multi-market backtesting engine with data loaders, signal engines, and portfolio analytics"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Easy Trading"},
+]
+keywords = ["backtest", "trading", "quantitative", "finance", "portfolio"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+
+# ─── Core dependencies ───
+dependencies = [
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "requests>=2.31.0",
+    "jinja2>=3.0.0",
+    "defusedxml>=0.7.0",
+    "pyyaml>=6.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/haibingzhao/trading-backtest"
+Repository = "https://github.com/haibingzhao/trading-backtest"
+Issues = "https://github.com/haibingzhao/trading-backtest/issues"
+Changelog = "https://github.com/haibingzhao/trading-backtest/blob/main/CHANGELOG.md"
+Upstream = "https://github.com/HKUDS/Vibe-Trading"
+
+[project.optional-dependencies]
+# A-share (China) data providers
+a-share = [
+    "tushare>=1.2.89",
+    "akshare>=1.12.0",
+    "baostock>=0.8.8",
+    "mootdx>=0.4.0",
+]
+
+# Global equity data providers
+global-equity = [
+    "yfinance>=0.2.30",
+]
+
+# Crypto data providers
+crypto = [
+    "ccxt>=4.0.0",
+]
+
+# Futu (HK + A-share)
+futu = [
+    "futu-api>=6.0.0",
+]
+
+# Rich terminal output for CLI
+cli = [
+    "rich>=13.0.0",
+]
+
+# All optional dependencies
+all = [
+    "trading-backtest[a-share,global-equity,crypto,futu,cli]",
+]
+
+[tool.setuptools.packages.find]
+include = ["backtest*"]
+
+[tool.setuptools.package-data]
+backtest = ["templates/**/*", "py.typed"]
+
+# ─── Testing ─────────────────────────────────────────────────────────────────────
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+# ─── Linting ─────────────────────────────────────────────────────────────────────
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "SIM"]
+ignore = ["E501", "B008", "B905"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["backtest"]
+
+# ─── Type Checking ───────────────────────────────────────────────────────────────
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+exclude = ["tests/", "build/", ".venv/"]
