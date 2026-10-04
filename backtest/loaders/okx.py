@@ -30,6 +30,32 @@ _MAX_PER_PAGE = 300
 _OKX_TIMEOUT = positive_env_int("OKX_TIMEOUT_S", 15)
 _OKX_FETCH_BUDGET_S = positive_env_float("OKX_FETCH_BUDGET_S", 60.0)
 
+# OKX V5 ``instId`` quotes only against USDT for the majors (``BTC-USDT``);
+# the ``BTC-USD`` spelling is rejected with ``code == "51001"`` and an empty
+# ``data`` array. Callers (and market_data's auto source detection) legitimately
+# use the ``-USD`` alias, so it is rewritten to the USDT pair on the way out.
+_USD_ALIAS = "-USD"
+_USDT_QUOTE = "-USDT"
+
+
+def _to_okx_inst_id(symbol: str) -> str:
+    """Rewrite a ``-USD`` quote alias to OKX's ``-USDT`` ``instId``.
+
+    ``BTC-USD`` -> ``BTC-USDT``; anything else (including ``BTC-USDT``) is
+    returned unchanged. Derived via ``len(_USD_ALIAS)`` rather than a magic
+    slice index — a hard-coded ``[:-3]`` silently yields ``BTC--USDT``, which
+    OKX also answers with ``51001`` and an empty payload.
+
+    Args:
+        symbol: Exchange symbol, upper-cased (e.g. ``BTC-USD``).
+
+    Returns:
+        The OKX ``instId`` to query.
+    """
+    if symbol.endswith(_USD_ALIAS):
+        return symbol[: -len(_USD_ALIAS)] + _USDT_QUOTE
+    return symbol
+
 
 @register
 class DataLoader:
@@ -58,14 +84,16 @@ class DataLoader:
         """Fetch crypto OHLCV via OKX public API.
 
         Args:
-            codes: Symbols like ``["BTC-USDT", "ETH-USDT"]``.
+            codes: Symbols like ``["BTC-USDT", "ETH-USDT"]``. ``-USD`` aliases
+                (``BTC-USD``) are accepted and queried as the ``-USDT`` pair;
+                the returned mapping keeps the caller's original spelling.
             start_date: Start date (YYYY-MM-DD).
             end_date: End date (YYYY-MM-DD).
             fields: Ignored (OKX has no extra fields).
             interval: Bar size (1m/5m/15m/30m/1H/4H/1D), default ``1D``.
 
         Returns:
-            Mapping symbol -> DataFrame.
+            Mapping symbol -> DataFrame, keyed by the requested (original) code.
         """
         validate_date_range(start_date, end_date)
 
@@ -86,20 +114,25 @@ class DataLoader:
 
         result: Dict[str, pd.DataFrame] = {}
         for symbol in codes:
+            # Query the USDT pair for ``-USD`` aliases but key the result under
+            # the caller's original code, so upstream resolution checks (which
+            # compare against the requested symbol) still match.
+            original_symbol = symbol
+            inst_id = _to_okx_inst_id(symbol)
             try:
                 df = cached_loader_fetch(
                     source=self.name,
-                    symbol=symbol,
+                    symbol=inst_id,
                     timeframe=interval,
                     start_date=start_date,
                     end_date=end_date,
                     fields=None,
-                    fetch=lambda symbol=symbol: self._fetch_candles(
-                        symbol, start_ts, end_ts, interval, max_pages
+                    fetch=lambda inst_id=inst_id: self._fetch_candles(
+                        inst_id, start_ts, end_ts, interval, max_pages
                     ),
                 )
                 if df is not None and not df.empty:
-                    result[symbol] = df
+                    result[original_symbol] = df
             except Exception as exc:
                 print(f"[WARN] failed to fetch {symbol}: {exc}")
         return result

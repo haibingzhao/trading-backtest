@@ -19,6 +19,7 @@ _MARKET_PATTERNS = [
     (re.compile(r"^[A-Z]+/USDT$", re.I), "crypto"),
     (re.compile(r"^[A-Za-z]{1,2}\d{3,4}\.(ZCE|DCE|SHFE|INE|CFFEX|GFEX)$", re.I), "futures"),
     (re.compile(r"^[A-Z]{2,4}[FGHJKMNQUVXZ]\d{1,2}$", re.I), "futures"),
+    # NOTE: 东财板块码（BKxxxx）也会命中此模式，但板块码仅用于行情查询，勿放入回测 config
     (re.compile(r"^[A-Z]{2,4}\d{4}$", re.I), "futures"),
     (re.compile(r"^[A-Z]{2,4}\.(CME|CBOT|NYMEX|COMEX|ICE|EUREX)$", re.I), "futures"),
     (re.compile(r"^[A-Z]{3}/[A-Z]{3}$"), "forex"),

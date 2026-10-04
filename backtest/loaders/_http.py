@@ -19,6 +19,7 @@ machines. For batch jobs raise the relevant ``*_MIN_INTERVAL`` env var.
 from __future__ import annotations
 
 import logging
+import os
 import random
 import threading
 import time
@@ -88,6 +89,49 @@ class HostThrottle:
 # One shared gate for the whole process.
 _THROTTLE = HostThrottle()
 
+# ── BY_PROXY-aware session proxy ─────────────────────────────────
+# When BY_PROXY is set, only sessions whose host bucket matches a
+# whitelisted domain route through the proxy; everything else goes
+# direct.  This avoids the urllib3 bug where NO_PROXY is ignored
+# for SOCKS5 proxies.
+
+def _parse_by_proxy() -> set[str]:
+    """Extract core domain tokens from the BY_PROXY env var.
+
+    ``"*.finnhub.io,finnhub.io"`` → ``{"finnhub"}``
+    """
+    raw = os.environ.get("BY_PROXY", "")
+    tokens: set[str] = set()
+    for pattern in raw.split(","):
+        p = pattern.strip().lower().lstrip("*.")
+        # Take the first label as the core token (e.g. "finnhub.io" → "finnhub")
+        core = p.split(".")[0]
+        if core:
+            tokens.add(core)
+    return tokens
+
+_BY_PROXY_TOKENS: set[str] = _parse_by_proxy()
+
+# host_key → BY_PROXY token aliases when the loader's short bucket name
+# differs from the domain's first label.
+_BUCKET_ALIASES: dict[str, str] = {
+    "fmp": "financialmodelingprep",
+}
+
+
+def _proxy_for_bucket(bucket: str) -> dict[str, str] | None:
+    """Return explicit proxy dict when *bucket* is in the BY_PROXY whitelist."""
+    if not _BY_PROXY_TOKENS:
+        return None  # No whitelist → fall back to env vars (trust_env)
+    proxy_url = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
+    if not proxy_url:
+        return None
+    key = _BUCKET_ALIASES.get(bucket.lower(), bucket.lower())
+    if key in _BY_PROXY_TOKENS:
+        return {"http": proxy_url, "https": proxy_url}
+    return {}  # Empty dict = force direct (override env vars)
+
+
 # Per-process session reuse, keyed by host bucket so different providers keep
 # independent connection pools and cookie jars.
 _SESSIONS: dict[str, requests.Session] = {}
@@ -99,6 +143,10 @@ def _session_for(bucket: str) -> requests.Session:
         session = _SESSIONS.get(bucket)
         if session is None:
             session = requests.Session()
+            explicit = _proxy_for_bucket(bucket)
+            if explicit is not None:
+                session.trust_env = False
+                session.proxies = explicit
             _SESSIONS[bucket] = session
         return session
 

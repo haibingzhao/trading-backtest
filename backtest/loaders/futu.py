@@ -1,4 +1,4 @@
-"""Futu OpenAPI-backed loader for HK and China A-share OHLCV data."""
+"""Futu OpenAPI-backed loader for HK, US and China A-share OHLCV data."""
 
 from __future__ import annotations
 
@@ -37,6 +37,8 @@ def _to_futu_symbol(code: str) -> str:
         5.HK      -> HK.00005
         000001.SZ -> SZ.000001
         600519.SH -> SH.600519
+        AAPL.US   -> US.AAPL
+        AAPL      -> US.AAPL  (bare alpha tickers are treated as US)
     """
     upper = code.strip().upper()
     if upper.endswith(".HK"):
@@ -45,6 +47,12 @@ def _to_futu_symbol(code: str) -> str:
         return f"SZ.{upper[:-3].zfill(6)}"
     if upper.endswith(".SH"):
         return f"SH.{upper[:-3].zfill(6)}"
+    if upper.endswith(".US"):
+        return f"US.{upper[:-3]}"
+    # Bare alpha ticker (e.g. AAPL) -> US market; numeric-only codes are
+    # left untouched (ambiguous between A-share / HK without a suffix).
+    if upper.isalpha():
+        return f"US.{upper}"
     return upper
 
 
@@ -83,14 +91,14 @@ def _normalize_frame(df: pd.DataFrame) -> pd.DataFrame:
 
 @register
 class FutuLoader:
-    """Fetch HK and China A-share bars from Futu OpenAPI.
+    """Fetch HK, US and China A-share bars from Futu OpenAPI.
 
     Requires FutuOpenD running locally (https://www.futunn.com/download/openAPI)
     and the environment variables ``FUTU_HOST`` / ``FUTU_PORT`` to be set.
     """
 
     name = "futu"
-    markets = {"hk_equity", "a_share"}
+    markets = {"hk_equity", "a_share", "us_equity"}
     requires_auth = True
 
     def __init__(self) -> None:

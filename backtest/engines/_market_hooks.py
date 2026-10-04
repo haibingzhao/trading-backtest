@@ -34,6 +34,8 @@ _MARKET_PATTERNS = [
     # Global futures: product+month-code (e.g. ESZ4, CLF25, GCM2025)
     (re.compile(r"^[A-Z]{2,4}[FGHJKMNQUVXZ]\d{1,2}$", re.I), "futures"),
     # Global futures: product+YYMM (e.g. CL2412, ES2503)
+    # NOTE: Eastmoney sector board codes (BKxxxx) also match this pattern but
+    # are data-query-only symbols — never put them in a backtest config.
     (re.compile(r"^[A-Z]{2,4}\d{4}$", re.I), "futures"),
     # Global futures: bare product code with exchange (e.g. ES.CME)
     (re.compile(r"^[A-Z]{2,4}\.(CME|CBOT|NYMEX|COMEX|ICE|EUREX)$", re.I), "futures"),

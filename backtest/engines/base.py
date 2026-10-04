@@ -371,6 +371,9 @@ class BaseEngine(ABC):
         signal_engine: Any,
         run_dir: Path,
         bars_per_year: int = 252,
+        *,
+        write_artifacts: bool = True,
+        artifact_dir: Path | None = None,
     ) -> Dict[str, Any]:
         """Full backtest pipeline.
 
@@ -382,6 +385,8 @@ class BaseEngine(ABC):
             signal_engine: SignalEngine with ``generate()`` method.
             run_dir: Artifacts output directory.
             bars_per_year: Annualisation factor.
+            write_artifacts: If False, skip all file output (steps 8/8b/8c/9).
+            artifact_dir: Custom artifact output directory. Defaults to run_dir/"artifacts".
 
         Returns:
             Metrics dictionary.
@@ -489,63 +494,75 @@ class BaseEngine(ABC):
             except Exception as exc:
                 logger.warning("Periodic metrics failed: %s", exc)
 
-        # 6d. Rolling monitor (opt-in)
+        # 6d. Rolling monitor (opt-in); the JSON file is written in step 8 so
+        # write_artifacts=False stays side-effect free and the stale-file
+        # cleanup cannot delete the freshly written artifact.
         if config.get("rolling_monitor"):
             try:
                 from backtest.rolling_monitor import generate_rolling_json
-                rolling_data = generate_rolling_json(equity_series, bench_ret, bars_per_year)
-                m["rolling"] = rolling_data
-                # Write rolling_monitor.json artifact
-                rolling_path = run_dir / "artifacts" / "rolling_monitor.json"
-                rolling_path.parent.mkdir(parents=True, exist_ok=True)
-                rolling_path.write_text(json.dumps(rolling_data, indent=2, ensure_ascii=False), encoding="utf-8")
+                m["rolling"] = generate_rolling_json(equity_series, bench_ret, bars_per_year)
             except Exception as exc:
                 logger.warning("Rolling monitor failed: %s", exc)
 
         # 7. Validation (optional — triggered by config["validation"])
         if config.get("validation"):
             from backtest.validation import run_validation
-            v_results = run_validation(
+            m["validation"] = run_validation(
                 config, equity_series, self.trades, self.initial_capital, bars_per_year,
             )
-            m["validation"] = v_results
-            # Write validation.json artifact
-            v_path = run_dir / "artifacts" / "validation.json"
-            v_path.parent.mkdir(parents=True, exist_ok=True)
-            v_path.write_text(json.dumps(v_results, indent=2, ensure_ascii=False), encoding="utf-8")
 
         # 8. Artifacts
-        self._write_artifacts(
-            run_dir, data_map, dates, equity_series, bench_equity, bench_ret,
-            target_pos, m, valid_codes,
-        )
+        if write_artifacts:
+            _art_dir = artifact_dir or (run_dir / "artifacts")
+            self._write_artifacts(
+                run_dir, data_map, dates, equity_series, bench_equity, bench_ret,
+                target_pos, m, valid_codes, artifact_dir=_art_dir,
+            )
 
-        # 8b. Lot-size impact analysis (after trades.csv is written)
-        _is_lot_market = any(
-            any(suf in c for c in codes) for suf in (".SH", ".SZ", ".HK")
-        )
-        if config.get("lot_size_analysis") or _is_lot_market:
-            try:
-                from backtest.lot_size_analysis import quantify_lot_impact
-                trades_csv = run_dir / "artifacts" / "trades.csv"
-                if trades_csv.exists():
-                    lot_impact = quantify_lot_impact(trades_csv, self.initial_capital)
-                    m["lot_size_impact"] = lot_impact
-                    # Write lot_size_impact.json
-                    lot_path = run_dir / "artifacts" / "lot_size_impact.json"
-                    lot_path.write_text(json.dumps(lot_impact, indent=2, ensure_ascii=False), encoding="utf-8")
-            except Exception as exc:
-                logger.warning("Lot-size analysis failed: %s", exc)
+            # 7b/6d-bis. JSON artifacts computed above (after the stale-file
+            # cleanup in _write_artifacts so they survive this run).
+            if "rolling" in m:
+                (_art_dir / "rolling_monitor.json").write_text(
+                    json.dumps(m["rolling"], indent=2, ensure_ascii=False), encoding="utf-8")
+            if "validation" in m:
+                (_art_dir / "validation.json").write_text(
+                    json.dumps(m["validation"], indent=2, ensure_ascii=False), encoding="utf-8")
 
-        # 9. Trust Layer run card
-        from backtest.run_card import write_run_card
-        write_run_card(
-            run_dir,
-            config,
-            m,
-            data_sources=_run_card_data_sources(config, loader),
-            strategy_path=run_dir / "code" / "signal_engine.py",
-        )
+            # 8b. Lot-size impact analysis (after trades.csv is written)
+            _is_lot_market = any(
+                any(suf in c for c in codes) for suf in (".SH", ".SZ", ".HK")
+            )
+            if config.get("lot_size_analysis") or _is_lot_market:
+                try:
+                    from backtest.lot_size_analysis import quantify_lot_impact
+                    trades_csv = _art_dir / "trades.csv"
+                    if trades_csv.exists():
+                        lot_impact = quantify_lot_impact(trades_csv, self.initial_capital)
+                        m["lot_size_impact"] = lot_impact
+                        lot_path = _art_dir / "lot_size_impact.json"
+                        lot_path.write_text(json.dumps(lot_impact, indent=2, ensure_ascii=False), encoding="utf-8")
+                except Exception as exc:
+                    logger.warning("Lot-size analysis failed: %s", exc)
+
+            # 8c. Next order recommendation
+            next_order = self._compute_next_order(signal_map, data_map, valid_codes)
+            if next_order:
+                m["next_order"] = next_order
+                no_path = _art_dir / "next_order.json"
+                no_path.write_text(json.dumps(next_order, indent=2, ensure_ascii=False), encoding="utf-8")
+
+            # 9. Trust Layer run card. With an explicit artifact_dir (e.g. the
+            # structured export's train/test/full_period sub-runs) the card goes
+            # there too — otherwise all sub-runs would clobber the same
+            # run_card.json at the shared run_dir root.
+            from backtest.run_card import write_run_card
+            write_run_card(
+                artifact_dir or run_dir,
+                config,
+                m,
+                data_sources=_run_card_data_sources(config, loader),
+                strategy_path=run_dir / "code" / "signal_engine.py",
+            )
 
         # Print scalar metrics (skip nested dicts for JSON compat)
         print(json.dumps({k: v for k, v in m.items() if not isinstance(v, dict)}, indent=2))
@@ -606,7 +623,11 @@ class BaseEngine(ABC):
                 positions=len(self.positions),
             ))
 
-        # d. Force close all remaining positions
+        # d. Capture end-of-backtest positions (before force-close) for next_order
+        self._end_positions: Dict[str, Position] = dict(self.positions)
+        self._end_equity: float = self._calc_equity(close_df, dates[-1]) if len(dates) > 0 else self.capital
+
+        # e. Force close all remaining positions
         if len(dates) > 0:
             last_ts = dates[-1]
             for c in list(self.positions.keys()):
@@ -738,6 +759,109 @@ class BaseEngine(ABC):
             commission=pos.entry_commission + exit_comm,
         ))
 
+    # ── Next order computation ──
+
+    def _compute_next_order(
+        self,
+        signal_map: Dict[str, pd.Series],
+        data_map: Dict[str, pd.DataFrame],
+        codes: List[str],
+    ) -> Optional[Dict[str, Any]]:
+        """Compute the recommended next-day order based on latest signal vs current position.
+
+        Compares the last bar's raw signal (unshifted) against the end-of-backtest
+        position state to determine what action should be taken on the next trading day.
+
+        Args:
+            signal_map: Raw signal series per symbol (unshifted).
+            data_map: OHLCV data per symbol.
+            codes: Valid instrument codes.
+
+        Returns:
+            Next order dict, or None if no signal data available.
+        """
+        end_positions = getattr(self, "_end_positions", {})
+        end_equity = getattr(self, "_end_equity", self.initial_capital)
+
+        orders: List[Dict[str, Any]] = []
+        last_date = None
+
+        for code in codes:
+            sig_series = signal_map.get(code)
+            if sig_series is None or sig_series.empty:
+                continue
+
+            # Last raw signal value (unshifted) = target for next trading day
+            last_signal = float(sig_series.iloc[-1])
+            last_signal = max(-1.0, min(1.0, last_signal))
+
+            if last_date is None and sig_series.index.size > 0:
+                last_date = str(sig_series.index[-1].date()) if hasattr(sig_series.index[-1], "date") else str(sig_series.index[-1])
+
+            # Reference price: last close
+            df = data_map.get(code)
+            ref_price = float(df["close"].iloc[-1]) if df is not None and not df.empty else 0.0
+
+            # Current position state at end of backtest
+            pos = end_positions.get(code)
+            if pos is not None:
+                current_dir = pos.direction
+                current_size = pos.size
+                current_notional = round(pos.size * pos.entry_price, 2)
+            else:
+                current_dir = 0
+                current_size = 0.0
+                current_notional = 0.0
+
+            # Determine target direction
+            target_dir = 1 if last_signal > 1e-9 else (-1 if last_signal < -1e-9 else 0)
+
+            # Determine action
+            if current_dir == 0 and target_dir == 0:
+                action = "wait"  # no position, no signal → stay flat
+            elif current_dir == 0 and target_dir != 0:
+                action = "open_long" if target_dir == 1 else "open_short"
+            elif current_dir != 0 and target_dir == 0:
+                action = "close"
+            elif current_dir == target_dir:
+                action = "hold"  # same direction, maintain
+            else:
+                action = "switch"  # direction reversal
+
+            # Estimated target size (based on target weight and equity)
+            target_notional = abs(last_signal) * end_equity * self.default_leverage
+            est_size = self.round_size(
+                self._calc_raw_size(code, target_notional, ref_price), ref_price
+            ) if ref_price > 0 and target_dir != 0 else 0.0
+
+            order_entry: Dict[str, Any] = {
+                "symbol": code,
+                "action": action,
+                "signal": round(last_signal, 6),
+                "target_direction": "long" if target_dir == 1 else ("short" if target_dir == -1 else "flat"),
+                "current_direction": "long" if current_dir == 1 else ("short" if current_dir == -1 else "flat"),
+                "current_size": round(current_size, 6),
+                "current_notional": current_notional,
+                "target_weight": round(abs(last_signal), 6),
+                "estimated_size": round(est_size, 6),
+                "reference_price": round(ref_price, 4),
+            }
+            orders.append(order_entry)
+
+        if not orders:
+            return None
+
+        # Summary: has actionable order?
+        actionable = [o for o in orders if o["action"] not in ("wait", "hold")]
+
+        return {
+            "as_of": last_date,
+            "description": "下一交易日建议操作（基于回测最后一根 bar 的信号）",
+            "has_action": len(actionable) > 0,
+            "equity": round(end_equity, 2),
+            "orders": orders,
+        }
+
     # ── Artifacts ──
 
     def _write_artifacts(
@@ -751,15 +875,20 @@ class BaseEngine(ABC):
         target_pos: pd.DataFrame,
         metrics: dict,
         codes: List[str],
+        artifact_dir: Path | None = None,
     ) -> None:
         """Write CSV artifacts compatible with daily_portfolio format."""
-        import shutil
-        out = run_dir / "artifacts"
+        out = artifact_dir if artifact_dir else (run_dir / "artifacts")
+        out.mkdir(parents=True, exist_ok=True)
         # Clear stale artifacts from previous runs to avoid leftover files
         # (e.g. ohlcv for symbols no longer in the run, old validation.json).
-        if out.exists():
-            shutil.rmtree(out)
-        out.mkdir(parents=True)
+        for f in out.glob("ohlcv_*.csv"):
+            f.unlink()
+        for name in ("equity.csv", "positions.csv", "trades.csv", "metrics.csv",
+                     "chart_data.json", "report.html", "validation.json",
+                     "rolling_monitor.json", "lot_size_impact.json",
+                     "next_order.json"):
+            (out / name).unlink(missing_ok=True)
 
         # OHLCV per symbol
         for code, df in data_map.items():

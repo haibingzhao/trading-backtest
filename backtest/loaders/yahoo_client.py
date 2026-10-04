@@ -71,13 +71,17 @@ def map_symbol(symbol: str) -> str:
         symbol: Project-side symbol, e.g. ``AAPL.US``, ``00700.HK``, ``BTC-USD``.
 
     Returns:
-        The Yahoo ticker: ``.US`` suffix stripped; ``.HK`` codes normalized to
-        a 4-digit base (``00700.HK`` -> ``0700.HK``); everything else unchanged.
+        The Yahoo ticker: ``.US`` suffix stripped; ``.SH`` codes rewritten to
+        Yahoo's Shanghai suffix ``.SS`` (``600519.SH`` -> ``600519.SS``);
+        ``.HK`` codes normalized to a 4-digit base (``00700.HK`` -> ``0700.HK``);
+        everything else unchanged.
     """
     cleaned = symbol.strip()
     upper = cleaned.upper()
     if upper.endswith(".US"):
         return cleaned[: -len(".US")]
+    if upper.endswith(".SH"):
+        return cleaned[: -len(".SH")] + ".SS"
     if upper.endswith(".HK"):
         base = cleaned[: -len(".HK")]
         digits = base.lstrip("0") or "0"

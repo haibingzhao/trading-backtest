@@ -16,6 +16,8 @@ Eastmoney addresses every instrument by a ``secid`` of the form ``<market>.<code
 * US (``.US``) markets (NASDAQ ``105`` / NYSE ``106`` / AMEX ``107``) are not
   derivable from the ticker alone, so the market prefix is discovered once via
   Eastmoney's search/suggest endpoint and cached for the life of the process.
+* Sector/concept boards (bare ``BKxxxx``) use market ``90``; CSI-series
+  indices (``.CSI``) use market ``1`` (``000xxx``) or ``2`` (``9xxxxx``/``Hxxxxx``).
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 # Eastmoney kline endpoints. push2his serves historical bars; searchapi resolves
 # a free-text ticker to its fully-qualified secid (needed for US tickers).
-_KLINE_URL = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+_KLINE_URL = "http://push2his.eastmoney.com/api/qt/stock/kline/get"
 _SEARCH_URL = "https://searchapi.eastmoney.com/api/suggest/get"
 
 # Throttle/session bucket shared by all Eastmoney calls.
@@ -76,12 +78,13 @@ def _min_interval() -> float:
     return resolve_min_interval(_MIN_INTERVAL_ENV, _DEFAULT_MIN_INTERVAL)
 
 
-def get_json(url: str, *, params: dict[str, Any]) -> Any:
+def get_json(url: str, *, params: dict[str, Any], timeout: float = 15.0) -> Any:
     """Issue a throttled Eastmoney GET and decode the body as JSON.
 
     Args:
         url: Fully-qualified Eastmoney endpoint URL.
         params: Query parameters for the request.
+        timeout: Per-request socket timeout in seconds.
 
     Returns:
         The decoded JSON payload (typically a ``dict``).
@@ -97,6 +100,7 @@ def get_json(url: str, *, params: dict[str, Any]) -> Any:
         host_key=_HOST_KEY,
         min_interval=_min_interval(),
         params=params,
+        timeout=timeout,
     )
 
 
@@ -109,6 +113,25 @@ def _resolve_a_share_secid(code: str, suffix: str) -> str | None:
         return f"1.{code}"
     if suffix in ("SZ", "BJ"):
         return f"0.{code}"
+    return None
+
+
+# Eastmoney sector/concept board code (industry and concept boards share
+# market 90), e.g. BK0475.
+_BK_CODE_RE = re.compile(r"BK\d{4}")
+
+# CSI-series index codes published on the SH side use market 1; the 9xxxxx /
+# Hxxxxx series (e.g. 931865, H30184) use market 2.
+_CSI_SH_RE = re.compile(r"000\d{3}")
+_CSI_SZ_RE = re.compile(r"(9\d{5}|H\d{5})")
+
+
+def _resolve_csi_secid(code: str) -> str | None:
+    """Map a bare CSI index ``code`` (from a ``.CSI`` symbol) to its secid."""
+    if _CSI_SH_RE.fullmatch(code):
+        return f"1.{code}"
+    if _CSI_SZ_RE.fullmatch(code):
+        return f"2.{code}"
     return None
 
 
@@ -206,22 +229,30 @@ def _resolve_us_secid(code: str) -> str | None:
 def resolve_secid(symbol: str) -> str | None:
     """Map a Trading-Backtest symbol to its Eastmoney secid.
 
-    Supported suffixes: ``.SH`` / ``.SZ`` / ``.BJ`` (A-share), ``.HK`` (Hong
-    Kong, code zero-padded to five digits), ``.US`` (resolved via search and
-    cached). A symbol with no recognized suffix, or a US ticker the search
-    cannot place, returns ``None``.
+    Supported forms: ``.SH`` / ``.SZ`` / ``.BJ`` (A-share), ``.HK`` (Hong Kong,
+    code zero-padded to five digits), ``.US`` (resolved via search and cached),
+    bare ``BKxxxx`` (Eastmoney sector/concept board, market ``90``), and
+    ``.CSI`` (CSI index series: ``000xxx`` -> market ``1``, ``9xxxxx``/``Hxxxxx``
+    -> market ``2``). A symbol with no recognized form, or a US ticker the
+    search cannot place, returns ``None``.
 
     Args:
-        symbol: Symbol such as ``"600519.SH"``, ``"00700.HK"`` or ``"AAPL.US"``.
+        symbol: Symbol such as ``"600519.SH"``, ``"00700.HK"``, ``"AAPL.US"``,
+            ``"BK0475"`` or ``"H30184.CSI"``.
 
     Returns:
         The Eastmoney secid (e.g. ``"1.600519"``), or ``None`` if unresolvable.
     """
-    if not symbol or "." not in symbol:
+    if not symbol:
         return None
-    code, _, suffix = symbol.rpartition(".")
-    code = code.strip().upper()
-    suffix = suffix.strip().upper()
+    sym = symbol.strip().upper()
+    if _BK_CODE_RE.fullmatch(sym):
+        return f"90.{sym}"
+    if "." not in sym:
+        return None
+    code, _, suffix = sym.rpartition(".")
+    code = code.strip()
+    suffix = suffix.strip()
     if not code:
         return None
 
@@ -231,6 +262,8 @@ def resolve_secid(symbol: str) -> str | None:
         return f"116.{code.zfill(5)}"
     if suffix == "US":
         return _resolve_us_secid(code)
+    if suffix == "CSI":
+        return _resolve_csi_secid(code)
     return None
 
 
@@ -271,6 +304,7 @@ def fetch_kline(
     fqt: int = 1,
     beg: str = "0",
     end: str = "20500101",
+    timeout: float = 15.0,
 ) -> list[dict]:
     """Fetch ascending OHLCV bars for one ``secid`` from push2his.
 
@@ -280,6 +314,7 @@ def fetch_kline(
         fqt: Adjustment mode (0 raw, 1 forward-adjusted, 2 back-adjusted).
         beg: Inclusive start date ``YYYYMMDD`` or ``"0"`` for earliest.
         end: Inclusive end date ``YYYYMMDD``.
+        timeout: Per-request socket timeout in seconds.
 
     Returns:
         Ascending list of ``{trade_date, open, high, low, close, volume,
@@ -303,6 +338,7 @@ def fetch_kline(
             "rev": "1",
             "lmt": "1000000",
         },
+        timeout=timeout,
     )
 
     data = payload.get("data") if isinstance(payload, dict) else None

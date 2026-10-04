@@ -11,6 +11,8 @@ Symbol routing is delegated to :func:`eastmoney_client.resolve_secid`:
 * A-share — ``600519.SH`` / ``000001.SZ`` / ``430139.BJ``
 * Hong Kong — ``00700.HK`` (numeric code zero-padded to five digits)
 * US — ``AAPL.US`` (market prefix discovered via Eastmoney search, cached)
+* Sector/concept board — ``BK0475`` (bare code, market ``90``)
+* CSI index — ``H30184.CSI`` / ``931865.CSI`` / ``000300.CSI``
 """
 
 from __future__ import annotations

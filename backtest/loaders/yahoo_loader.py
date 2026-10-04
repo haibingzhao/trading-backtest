@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import re
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -38,9 +39,22 @@ _INTERVAL_MAP = {
 }
 
 
-def _is_us_or_hk(code: str) -> bool:
-    """Return whether *code* is a US or HK equity symbol this loader handles."""
-    return code.strip().upper().endswith((".US", ".HK"))
+# Symbols that must NOT reach Yahoo: crypto pairs (owned by the okx/ccxt
+# chains), mainland exchanges (owned by the a-share/futures chains), and
+# Eastmoney-only symbols (BKxxxx sector boards, .CSI index series — owned by
+# the eastmoney chain; Yahoo cannot resolve either and would waste a request).
+# Everything else — AAPL.US, 00700.HK, bare tickers, ^SOX, BZ=F — passes
+# through yahoo_client.map_symbol unchanged or mapped and is worth a try.
+_REJECT_RE = re.compile(
+    r"(-USDT$|-USDC$|/USDT$|\.(SZ|BJ|CFFEX|SHFE|ZCE|DCE|INE|GFEX|CSI)$|^BK\d{4}$)",
+    re.I,
+)
+
+
+def _is_yahoo_symbol(code: str) -> bool:
+    """Return whether *code* is plausibly resolvable via Yahoo's chart API."""
+    c = (code or "").strip().upper()
+    return bool(c) and not _REJECT_RE.search(c)
 
 
 def _to_yahoo_interval(interval: str) -> str:
@@ -229,10 +243,10 @@ class DataLoader:
             interval: Backtest interval string.
 
         Returns:
-            The OHLCV DataFrame for *code*, ``None`` if it is not a US/HK symbol
-            or Yahoo returns no usable bars.
+            The OHLCV DataFrame for *code*, ``None`` if the symbol is rejected
+            (crypto/mainland) or Yahoo returns no usable bars.
         """
-        if not _is_us_or_hk(code):
+        if not _is_yahoo_symbol(code):
             return None
 
         # period2 is exclusive on Yahoo; extend one day past end_date so the

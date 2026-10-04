@@ -56,13 +56,36 @@ _STRATEGY_DEFAULTS: Dict[str, Any] = {
 # Total number of configurable parameters in StrategyBase
 TOTAL_PARAMS = len(_STRATEGY_DEFAULTS)
 
+# --- Parameter classification for weighted rule burden ---
+# Operational params: purely logistical, zero overfitting contribution.
+_OPERATIONAL_PARAMS = frozenset({"verbose"})
+
+# Structural params: boolean switches or design choices that enable/disable
+# a module. They represent a single binary decision, not a continuous search.
+_STRUCTURAL_PARAMS = frozenset({
+    "allow_short", "mr_enabled",
+})
+
+# Risk/guard params: safety thresholds typically set by experience, not
+# grid-searched. Lower overfitting contribution than signal params.
+_RISK_PARAMS = frozenset({
+    "max_drawdown_halt", "max_daily_loss", "max_consecutive_stops",
+    "max_position_ratio", "max_short_ratio", "mr_max_position_ratio",
+    "grid_stop_loss_pct",
+})
+
+# Weights for effective degrees of freedom
+_WEIGHT_STRUCTURAL = 0.5   # binary design choice
+_WEIGHT_RISK = 0.5         # experience-based safety threshold
+_WEIGHT_OPTIMIZED = 1.0    # continuous param likely grid-searched
+
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 def count_strategy_params(signal_params: Dict[str, Any]) -> int:
-    """Count non-default parameters explicitly set by the user.
+    """Count non-default parameters explicitly set by the user (raw count).
 
     Args:
         signal_params: The ``signal_params`` dict from config.json.
@@ -87,50 +110,141 @@ def count_strategy_params(signal_params: Dict[str, Any]) -> int:
     return count
 
 
-def assess_overfit_risk(n_params: int, n_trades: int) -> Dict[str, Any]:
-    """Assess overfitting risk based on parameter count and trade count.
+def effective_degrees_of_freedom(signal_params: Dict[str, Any]) -> float:
+    """Compute weighted effective degrees of freedom for overfitting assessment.
 
-    Rule of thumb (empirical):
-    - ``trades / params >= 20`` → safe
-    - ``10 <= trades / params < 20`` → warning
-    - ``trades / params < 10`` → critical
+    Not all parameters contribute equally to overfitting risk:
+    - Operational params (verbose): 0 weight
+    - Structural switches (allow_short, mr_enabled): 0.5 weight
+    - Risk/guard thresholds (max_drawdown_halt, etc.): 0.5 weight
+    - Signal/optimization params (ema_fast, trailing_stop_atr_mult, etc.): 1.0
 
     Args:
-        n_params: Number of non-default strategy parameters.
+        signal_params: The ``signal_params`` dict from config.json.
+
+    Returns:
+        Weighted effective degrees of freedom (float).
+    """
+    if not signal_params:
+        return 0.0
+
+    dof = 0.0
+    for key, value in signal_params.items():
+        if key in ("create_entry_signal",):
+            continue
+        if key in _OPERATIONAL_PARAMS:
+            continue
+        default = _STRATEGY_DEFAULTS.get(key)
+        if default is not None and value == default:
+            continue  # Not overridden
+
+        # Classify and weight
+        if key in _STRUCTURAL_PARAMS:
+            dof += _WEIGHT_STRUCTURAL
+        elif key in _RISK_PARAMS:
+            dof += _WEIGHT_RISK
+        else:
+            dof += _WEIGHT_OPTIMIZED
+
+    return dof
+
+
+def assess_overfit_risk(
+    n_params: int,
+    n_trades: int,
+    *,
+    effective_dof: float | None = None,
+    backtest_years: float | None = None,
+    market_return: float | None = None,
+    allow_short: bool = False,
+) -> Dict[str, Any]:
+    """Assess overfitting risk based on parameter count and trade count.
+
+    Rule of thumb (empirical, based on effective degrees of freedom):
+    - ``trades / dof >= 20`` → safe
+    - ``10 <= trades / dof < 20`` → warning
+    - ``trades / dof < 10`` → critical
+
+    When ``effective_dof`` is provided, it is used for the ratio calculation
+    instead of raw ``n_params``. This accounts for the fact that boolean
+    switches and risk thresholds contribute less to overfitting than
+    continuously optimized signal parameters.
+
+    Context-aware adjustments:
+    - If the underlying dropped > 15% over the period and shorting is
+      disabled, low trade count is expected — severity is downgraded one
+      level and a contextual note is added.
+
+    Args:
+        n_params: Raw number of non-default strategy parameters.
         n_trades: Total number of round-trip trades in the backtest.
+        effective_dof: Weighted effective degrees of freedom (optional).
+            If None, falls back to ``n_params``.
+        backtest_years: Backtest duration in years (optional).
+        market_return: Period return of the underlying, e.g. -0.25 means
+            the stock dropped 25% (optional).
+        allow_short: Whether the strategy allows short selling.
 
     Returns:
         Dict with ``level``, ``ratio``, ``n_params``, ``n_trades``, ``message``.
     """
-    if n_params == 0:
+    dof = effective_dof if effective_dof is not None else float(n_params)
+
+    if dof == 0:
         return {
             "level": "safe",
             "ratio": float("inf"),
-            "n_params": 0,
+            "n_params": n_params,
+            "effective_dof": 0.0,
             "n_trades": n_trades,
             "message": "使用默认参数，无过拟合风险",
         }
 
-    ratio = n_trades / n_params
+    ratio = n_trades / dof
 
     if ratio >= 20:
         level = "safe"
-        message = f"每参数 {ratio:.0f} 笔交易，样本量充足"
+        message = f"每有效自由度 {ratio:.0f} 笔交易，样本量充足"
     elif ratio >= 10:
         level = "warning"
-        message = f"每参数 {ratio:.0f} 笔交易，建议减少参数或增加数据量"
+        message = f"每有效自由度 {ratio:.0f} 笔交易，统计显著性有限，若因市场无机会导致交易少则属正常"
     else:
         level = "critical"
-        message = f"每参数仅 {ratio:.1f} 笔交易，过拟合风险高！考虑简化策略"
+        message = f"每有效自由度仅 {ratio:.1f} 笔交易，统计显著性有限，考虑增加数据量或简化参数"
 
-    return {
+    # --- Context-aware downgrade ---
+    detail: str | None = None
+    bear_no_short = (
+        market_return is not None
+        and market_return < -0.15
+        and not allow_short
+    )
+    if bear_no_short:
+        detail = "单边下跌市，低交易数属正常"
+        # Downgrade severity one level
+        if level == "critical":
+            level = "warning"
+            message = f"每有效自由度仅 {ratio:.1f} 笔交易，但标的区间跌幅 {market_return:.0%} 且不可做空，低交易数属正常"
+        elif level == "warning":
+            level = "safe"
+            message = f"每有效自由度 {ratio:.0f} 笔交易，标的区间跌幅 {market_return:.0%} 且不可做空，低交易数属正常"
+
+    result: Dict[str, Any] = {
         "level": level,
         "ratio": round(ratio, 1),
         "n_params": n_params,
+        "effective_dof": round(dof, 1),
         "n_trades": n_trades,
         "total_available_params": TOTAL_PARAMS,
         "message": message,
     }
+    if detail:
+        result["detail"] = detail
+    if backtest_years is not None:
+        result["backtest_years"] = round(backtest_years, 2)
+    if market_return is not None:
+        result["market_return"] = round(market_return, 4)
+    return result
 
 
 def format_burden_text(assessment: Dict[str, Any]) -> str:
@@ -139,18 +253,30 @@ def format_burden_text(assessment: Dict[str, Any]) -> str:
     emoji = {"safe": "[OK]", "warning": "[!!]", "critical": "[!!]"}
     prefix = emoji.get(level, "[?]")
 
+    n_params = assessment.get("n_params", 0)
+    eff_dof = assessment.get("effective_dof", n_params)
+    dof_note = f"（加权自由度 {eff_dof:.1f}）" if eff_dof != n_params else ""
+
     lines = [
         "=" * 60,
         f"{prefix} 规则负担评估: {level.upper()}",
         "=" * 60,
-        f"非默认参数数: {assessment.get('n_params', 0)} / {assessment.get('total_available_params', TOTAL_PARAMS)}",
+        f"非默认参数数: {n_params} / {assessment.get('total_available_params', TOTAL_PARAMS)}{dof_note}",
         f"总交易数: {assessment.get('n_trades', 0)}",
-        f"交易/参数比: {assessment.get('ratio', 0):.1f}",
+        f"交易/有效自由度比: {assessment.get('ratio', 0):.1f}",
         f"评估: {assessment.get('message', '')}",
-        "",
-        "参考: trades/params >= 20 为安全, 10-20 为警告, < 10 为危险",
-        "=" * 60,
     ]
+    if assessment.get("detail"):
+        lines.append(f"市场背景: {assessment['detail']}")
+    if assessment.get("backtest_years") is not None:
+        lines.append(f"回测时长: {assessment['backtest_years']:.2f} 年")
+    if assessment.get("market_return") is not None:
+        lines.append(f"标的区间收益: {assessment['market_return']:.2%}")
+    lines.extend([
+        "",
+        "参考: trades/有效自由度 >= 20 为安全, 10-20 为警告, < 10 为危险",
+        "=" * 60,
+    ])
     return "\n".join(lines)
 
 
@@ -179,7 +305,8 @@ def main(run_dir: Path) -> None:
         n_trades = len(df[df["side"] == "buy"])
 
     n_params = count_strategy_params(signal_params)
-    assessment = assess_overfit_risk(n_params, n_trades)
+    eff_dof = effective_degrees_of_freedom(signal_params)
+    assessment = assess_overfit_risk(n_params, n_trades, effective_dof=eff_dof)
 
     # Write to artifacts
     out_path = artifacts / "rule_burden.json"

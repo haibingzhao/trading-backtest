@@ -567,33 +567,117 @@ def main(run_dir: Path) -> None:
         market_engine = _create_market_engine(effective_source, config, codes)
         market_engine.run_backtest(config, loader, signal_engine, run_dir, bars_per_year=bars_per_year)
 
-    # === 最小交易次数告警 ===
+    # === 最小交易次数告警（基于年化频率） ===
     try:
         import os
         import csv
+        from datetime import date as _date
+
         trades_path = os.path.join(str(run_dir), "artifacts", "trades.csv")
         if os.path.exists(trades_path):
             with open(trades_path, "r", encoding="utf-8") as f:
                 trade_count = sum(1 for _ in csv.reader(f)) - 1  # 减去表头
+
+            # 计算回测时长（年）
+            start_str = config.get("start_date", "")
+            end_str = config.get("end_date", "")
+            backtest_years: float | None = None
+            if start_str and end_str:
+                try:
+                    d0 = _date.fromisoformat(start_str[:10])
+                    d1 = _date.fromisoformat(end_str[:10])
+                    days = (d1 - d0).days
+                    if days > 0:
+                        backtest_years = days / 365.25
+                except (ValueError, TypeError):
+                    pass
+
             if trade_count < 20:
-                logger.warning(
-                    "⚠ 回测仅产生 %d 笔交易（建议 ≥ 20），统计显著性不足，"
-                    "Sharpe/胜率等指标参考价值有限。建议扩大回测时间窗口或多标的组合回测。",
-                    trade_count
-                )
+                if backtest_years is not None and backtest_years < 1.0:
+                    # 回测不足 1 年，低交易数大概率正常，降级为 info
+                    logger.info(
+                        "提示: 回测产生 %d 笔交易（回测期 %.1f 个月），统计显著性有限。"
+                        "若因市场无机会导致交易少则属正常。",
+                        trade_count, backtest_years * 12,
+                    )
+                elif backtest_years is not None:
+                    annual_trades = trade_count / backtest_years
+                    if annual_trades >= 10:
+                        # 年化频率正常，仅提示绝对数偏少
+                        logger.info(
+                            "提示: 回测产生 %d 笔交易（年化约 %.0f 笔），频率正常，"
+                            "但绝对样本量有限，Sharpe/胜率等指标仅供参考。",
+                            trade_count, annual_trades,
+                        )
+                    else:
+                        logger.warning(
+                            "⚠ 回测产生 %d 笔交易（%.1f 年，年化仅 %.1f 笔），"
+                            "统计显著性有限。若因市场无机会导致交易少则属正常，"
+                            "否则建议扩大回测时间窗口或多标的组合回测。",
+                            trade_count, backtest_years, annual_trades,
+                        )
+                else:
+                    # 无法计算时长，保留原逻辑但措辞调整
+                    logger.warning(
+                        "⚠ 回测仅产生 %d 笔交易，统计显著性有限，"
+                        "Sharpe/胜率等指标参考价值有限。若因市场无机会导致交易少则属正常。",
+                        trade_count,
+                    )
     except Exception:
         pass  # 不影响主流程
 
     # === 规则负担(过拟合风险)告警 ===
     try:
-        from backtest.rule_burden import assess_overfit_risk, count_strategy_params
+        from backtest.rule_burden import (
+            assess_overfit_risk, count_strategy_params, effective_degrees_of_freedom,
+        )
         signal_params = config.get("signal_params", {})
         n_params = count_strategy_params(signal_params)
+        eff_dof = effective_degrees_of_freedom(signal_params)
         trades_path = os.path.join(str(run_dir), "artifacts", "trades.csv")
         if os.path.exists(trades_path):
             with open(trades_path, "r", encoding="utf-8") as f:
                 n_trades = (sum(1 for _ in csv.reader(f)) - 1) // 2  # round trips
-            risk = assess_overfit_risk(n_params, n_trades)
+
+            # 收集上下文: 回测时长、市场方向、是否可做空
+            rb_backtest_years: float | None = None
+            rb_market_return: float | None = None
+            rb_allow_short = bool(signal_params.get("allow_short", False))
+
+            start_str = config.get("start_date", "")
+            end_str = config.get("end_date", "")
+            if start_str and end_str:
+                try:
+                    from datetime import date as _date
+                    d0 = _date.fromisoformat(start_str[:10])
+                    d1 = _date.fromisoformat(end_str[:10])
+                    days = (d1 - d0).days
+                    if days > 0:
+                        rb_backtest_years = days / 365.25
+                except (ValueError, TypeError):
+                    pass
+
+            # 从 OHLCV 数据计算标的区间收益率
+            try:
+                if data_map:
+                    first_df = next(iter(data_map.values()))
+                    if first_df is not None and len(first_df) >= 2:
+                        close_col = "close" if "close" in first_df.columns else "Close"
+                        if close_col in first_df.columns:
+                            p0 = float(first_df[close_col].iloc[0])
+                            p1 = float(first_df[close_col].iloc[-1])
+                            if p0 > 0:
+                                rb_market_return = (p1 - p0) / p0
+            except Exception:
+                pass
+
+            risk = assess_overfit_risk(
+                n_params, n_trades,
+                effective_dof=eff_dof,
+                backtest_years=rb_backtest_years,
+                market_return=rb_market_return,
+                allow_short=rb_allow_short,
+            )
             if risk["level"] in ("warning", "critical"):
                 logger.warning(
                     "Rule burden: %d 非默认参数, %d 笔交易 → %s (%s)",

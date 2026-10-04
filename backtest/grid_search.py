@@ -52,6 +52,10 @@ class GridSearchSummary:
     best_overfit_score: float
     total_combinations: int
     elapsed_seconds: float
+    is_start: str = ""
+    is_end: str = ""
+    oos_start: str = ""
+    oos_end: str = ""
 
 
 def generate_param_combinations(param_grid: Dict[str, List[Any]]) -> Iterator[Dict[str, Any]]:
@@ -201,7 +205,8 @@ def _run_single_backtest(
     # Run backtest
     try:
         metrics = market_engine.run_backtest(
-            test_config, loader, signal_engine, run_dir, bars_per_year=bars_per_year
+            test_config, loader, signal_engine, run_dir, bars_per_year=bars_per_year,
+            write_artifacts=False,
         )
         # Return only scalar metrics
         return {
@@ -385,6 +390,10 @@ def run_grid_search(
         best_overfit_score=best_overfit,
         total_combinations=n_combos,
         elapsed_seconds=elapsed,
+        is_start=is_start,
+        is_end=is_end,
+        oos_start=oos_start,
+        oos_end=oos_end,
     )
 
 
@@ -427,6 +436,14 @@ def format_grid_search_report(summary: GridSearchSummary) -> str:
         lines.append(f"   IS Sharpe: {r.is_metrics.get('sharpe', 0.0):.4f}, "
                     f"OOS Sharpe: {r.oos_metrics.get('sharpe', 0.0):.4f}, "
                     f"过拟合: {r.overfit_score:.2%}")
+        lines.append(f"   IS MaxDD: {r.is_metrics.get('max_drawdown', 0.0):.2%}, "
+                    f"OOS MaxDD: {r.oos_metrics.get('max_drawdown', 0.0):.2%}, "
+                    f"IS WinRate: {r.is_metrics.get('win_rate', 0.0):.1%}, "
+                    f"OOS WinRate: {r.oos_metrics.get('win_rate', 0.0):.1%}")
+        lines.append(f"   IS Trades: {r.is_metrics.get('trade_count', 0)}, "
+                    f"OOS Trades: {r.oos_metrics.get('trade_count', 0)}, "
+                    f"IS Calmar: {r.is_metrics.get('calmar', 0.0):.4f}, "
+                    f"OOS Calmar: {r.oos_metrics.get('calmar', 0.0):.4f}")
 
     lines.append("=" * 60)
     return "\n".join(lines)
@@ -485,6 +502,13 @@ def main(run_dir: Path) -> None:
         "total_combinations": summary.total_combinations,
         "valid_results": len(summary.results),
         "elapsed_seconds": summary.elapsed_seconds,
+        "split": {
+            "ratio": split_ratio,
+            "is_start": summary.is_start,
+            "is_end": summary.is_end,
+            "oos_start": summary.oos_start,
+            "oos_end": summary.oos_end,
+        },
         "all_results": [
             {
                 "params": r.params,
@@ -492,6 +516,18 @@ def main(run_dir: Path) -> None:
                 "oos_sharpe": r.oos_metrics.get("sharpe", 0.0),
                 "is_return": r.is_metrics.get("total_return", 0.0),
                 "oos_return": r.oos_metrics.get("total_return", 0.0),
+                "is_max_drawdown": r.is_metrics.get("max_drawdown", 0.0),
+                "oos_max_drawdown": r.oos_metrics.get("max_drawdown", 0.0),
+                "is_calmar": r.is_metrics.get("calmar", 0.0),
+                "oos_calmar": r.oos_metrics.get("calmar", 0.0),
+                "is_sortino": r.is_metrics.get("sortino", 0.0),
+                "oos_sortino": r.oos_metrics.get("sortino", 0.0),
+                "is_win_rate": r.is_metrics.get("win_rate", 0.0),
+                "oos_win_rate": r.oos_metrics.get("win_rate", 0.0),
+                "is_profit_factor": r.is_metrics.get("profit_factor", 0.0),
+                "oos_profit_factor": r.oos_metrics.get("profit_factor", 0.0),
+                "is_trade_count": r.is_metrics.get("trade_count", 0),
+                "oos_trade_count": r.oos_metrics.get("trade_count", 0),
                 "overfit_score": r.overfit_score,
             }
             for r in summary.results
@@ -523,6 +559,14 @@ def main(run_dir: Path) -> None:
         pass
 
     print(f"\n结果已保存到: {out_path}")
+
+    # Structured export: train/test/full_period artifacts + manifest.json
+    try:
+        from backtest.structured_export import export_grid_search
+        structured_path = export_grid_search(config, run_dir, summary)
+        print(f"结构化产物已保存到: {structured_path}")
+    except Exception as exc:
+        logger.warning("Structured export failed: %s", exc)
 
 
 if __name__ == "__main__":

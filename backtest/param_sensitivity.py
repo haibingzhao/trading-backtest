@@ -52,6 +52,11 @@ def compute_sensitivity(
     # Discover parameter names (all keys that are not the objective or metadata)
     skip_keys = {objective, "is_sharpe", "oos_sharpe", "overfit_score",
                  "is_return", "oos_return", "is_max_dd", "oos_max_dd",
+                 "is_max_drawdown", "oos_max_drawdown",
+                 "is_calmar", "oos_calmar", "is_sortino", "oos_sortino",
+                 "is_win_rate", "oos_win_rate",
+                 "is_profit_factor", "oos_profit_factor",
+                 "is_trade_count", "oos_trade_count",
                  "error", "params"}
     sample = all_results[0]
     param_names = [k for k in sample if k not in skip_keys and not isinstance(sample[k], dict)]
